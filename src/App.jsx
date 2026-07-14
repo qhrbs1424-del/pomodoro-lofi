@@ -2,6 +2,7 @@
 
 const DEFAULT_MINUTES = { focus: 25, shortBreak: 5, longBreak: 15 }
 const MODE_LABELS = { focus: '집중', shortBreak: '짧은 휴식', longBreak: '긴 휴식' }
+const CYCLES_UNTIL_LONG = 4
 
 const LOFI_STREAMS = [
   { id: 'jfKfPfyJRdk', name: 'Lofi Girl · beats to relax/study' },
@@ -22,6 +23,7 @@ export default function App() {
   const [dark, setDark] = useState(() => loadJSON('pomo_dark', true))
   const [minutes, setMinutes] = useState(() => loadJSON('pomo_minutes', DEFAULT_MINUTES))
   const [voiceOn, setVoiceOn] = useState(() => loadJSON('pomo_voice', true))
+  const [autoStart, setAutoStart] = useState(() => loadJSON('pomo_auto', true))
   const [mode, setMode] = useState('focus')
   const [secondsLeft, setSecondsLeft] = useState(minutes.focus * 60)
   const [isRunning, setIsRunning] = useState(false)
@@ -33,15 +35,20 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const intervalRef = useRef(null)
   const femaleVoiceRef = useRef(null)
+  const pendingAutoStart = useRef(false)
 
-  // 여성 한국어 음성 자동 선택
+  // 현재 사이클 안의 위치 (1~4)
+  const cyclePosition = (completedCycles % CYCLES_UNTIL_LONG) + 1
+  // 다음 모드 예측
+  const nextMode = mode === 'focus'
+    ? ((completedCycles + 1) % CYCLES_UNTIL_LONG === 0 ? 'longBreak' : 'shortBreak')
+    : 'focus'
+
   useEffect(() => {
     const pickVoice = () => {
       const voices = window.speechSynthesis.getVoices()
       const koFemale = voices.find(
-        (v) =>
-          v.lang.startsWith('ko') &&
-          /female|여자|heami|sunhi|yuna/i.test(v.name)
+        (v) => v.lang.startsWith('ko') && /female|여자|heami|sunhi|yuna/i.test(v.name)
       )
       const koAny = voices.find((v) => v.lang.startsWith('ko'))
       femaleVoiceRef.current = koFemale || koAny || null
@@ -50,7 +57,6 @@ export default function App() {
     window.speechSynthesis.onvoiceschanged = pickVoice
   }, [])
 
-  // 음성 재생 함수
   const speak = (text) => {
     if (!voiceOn || !('speechSynthesis' in window)) return
     const utter = new SpeechSynthesisUtterance(text)
@@ -61,26 +67,25 @@ export default function App() {
     window.speechSynthesis.speak(utter)
   }
 
-  useEffect(() => {
-    localStorage.setItem('pomo_dark', JSON.stringify(dark))
-  }, [dark])
+  useEffect(() => { localStorage.setItem('pomo_dark', JSON.stringify(dark)) }, [dark])
+  useEffect(() => { localStorage.setItem('pomo_minutes', JSON.stringify(minutes)) }, [minutes])
+  useEffect(() => { localStorage.setItem('pomo_voice', JSON.stringify(voiceOn)) }, [voiceOn])
+  useEffect(() => { localStorage.setItem('pomo_auto', JSON.stringify(autoStart)) }, [autoStart])
 
+  // 자동 시작 처리 (모드 변경 후 secondsLeft 세팅되면 자동 실행)
   useEffect(() => {
-    localStorage.setItem('pomo_minutes', JSON.stringify(minutes))
-  }, [minutes])
+    if (pendingAutoStart.current) {
+      pendingAutoStart.current = false
+      setIsRunning(true)
+    }
+  }, [secondsLeft, mode])
 
-  useEffect(() => {
-    localStorage.setItem('pomo_voice', JSON.stringify(voiceOn))
-  }, [voiceOn])
-
-  // 타이머 + 음성 스케줄링 (TTS 지연 보정)
   useEffect(() => {
     if (!isRunning) return
-
     const totalMs = secondsLeft * 1000
     const scheduled = []
     const countdownMap = { 5: '오', 4: '사', 3: '삼', 2: '이', 1: '일' }
-    const OFFSET = 300 // TTS 지연 보정 (ms) - 화면 바뀌기 300ms 전에 발화
+    const OFFSET = 300
 
     Object.keys(countdownMap).forEach((n) => {
       const num = Number(n)
@@ -89,15 +94,10 @@ export default function App() {
         scheduled.push(setTimeout(() => speak(countdownMap[num]), fireAt))
       }
     })
+    scheduled.push(setTimeout(() => {
+      speak(mode === 'focus' ? '휴식 시간입니다' : '다시 집중해볼까요')
+    }, totalMs + 200))
 
-    // 종료 안내 멘트
-    scheduled.push(
-      setTimeout(() => {
-        speak(mode === 'focus' ? '휴식 시간입니다' : '다시 집중해볼까요')
-      }, totalMs + 200)
-    )
-
-    // 화면 tick
     intervalRef.current = setInterval(() => {
       setSecondsLeft((s) => {
         if (s <= 1) {
@@ -117,14 +117,20 @@ export default function App() {
 
   const handleComplete = () => {
     setIsRunning(false)
+    let newMode
     if (mode === 'focus') {
       const next = completedCycles + 1
       setCompletedCycles(next)
       localStorage.setItem('pomo_cycles', next)
-      switchMode(next % 4 === 0 ? 'longBreak' : 'shortBreak')
+      newMode = next % CYCLES_UNTIL_LONG === 0 ? 'longBreak' : 'shortBreak'
     } else {
-      switchMode('focus')
+      newMode = 'focus'
     }
+    setMode(newMode)
+    setSecondsLeft(minutes[newMode] * 60)
+    // 자동 시작 예약
+    if (autoStart) pendingAutoStart.current = true
+
     if (Notification.permission === 'granted') {
       new Notification('타이머 완료', {
         body: mode === 'focus' ? '휴식 시간이에요' : '다시 집중해볼까요',
@@ -142,7 +148,6 @@ export default function App() {
     if (!isRunning && Notification.permission === 'default') {
       Notification.requestPermission()
     }
-    // 음성 엔진 워밍업
     if (!isRunning && voiceOn && 'speechSynthesis' in window) {
       const warm = new SpeechSynthesisUtterance(' ')
       warm.volume = 0
@@ -181,13 +186,14 @@ export default function App() {
   const primary = dark ? 'bg-white text-neutral-900' : 'bg-neutral-900 text-white'
   const ring = dark ? 'stroke-neutral-100' : 'stroke-neutral-900'
   const ringBg = dark ? 'stroke-neutral-800' : 'stroke-neutral-200'
+  const dotOn = dark ? 'bg-neutral-100' : 'bg-neutral-900'
+  const dotOff = dark ? 'bg-neutral-700' : 'bg-neutral-300'
 
   return (
     <div
       className={`min-h-screen ${bg} ${text} transition-colors duration-300`}
       style={{
-        fontFamily:
-          '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif',
       }}
     >
       <div className="max-w-md mx-auto px-6 py-8 flex flex-col gap-5">
@@ -274,13 +280,8 @@ export default function App() {
           <svg className="absolute inset-6 -rotate-90" viewBox="0 0 100 100">
             <circle cx="50" cy="50" r="46" fill="none" className={ringBg} strokeWidth="2.5" />
             <circle
-              cx="50"
-              cy="50"
-              r="46"
-              fill="none"
-              className={ring}
-              strokeWidth="2.5"
-              strokeLinecap="round"
+              cx="50" cy="50" r="46" fill="none"
+              className={ring} strokeWidth="2.5" strokeLinecap="round"
               strokeDasharray={`${2 * Math.PI * 46}`}
               strokeDashoffset={`${2 * Math.PI * 46 * (1 - progress)}`}
               style={{ transition: 'stroke-dashoffset 1s linear' }}
@@ -292,6 +293,20 @@ export default function App() {
             </div>
             <div className={`text-xs ${subtext} mt-2 uppercase tracking-widest`}>
               {MODE_LABELS[mode]}
+            </div>
+            {/* 사이클 진행 인디케이터 */}
+            <div className="flex justify-center gap-1.5 mt-3">
+              {Array.from({ length: CYCLES_UNTIL_LONG }).map((_, i) => (
+                <div
+                  key={i}
+                  className={`w-1.5 h-1.5 rounded-full transition ${
+                    i < cyclePosition - (mode === 'focus' ? 1 : 0) ? dotOn : dotOff
+                  }`}
+                />
+              ))}
+            </div>
+            <div className={`text-[10px] ${subtext} mt-2`}>
+              다음: {MODE_LABELS[nextMode]}
             </div>
           </div>
         </div>
@@ -326,26 +341,42 @@ export default function App() {
                     <button
                       onClick={() => updateMinutes(key, minutes[key] - 1)}
                       className={`w-8 h-8 rounded-full ${cardInner} flex items-center justify-center font-medium`}
-                    >
-                      −
-                    </button>
+                    >−</button>
                     <input
                       type="number"
                       value={minutes[key]}
                       onChange={(e) => updateMinutes(key, e.target.value)}
                       className={`w-14 text-center py-1.5 rounded-lg ${cardInner} outline-none text-sm font-medium`}
-                      min="1"
-                      max="180"
+                      min="1" max="180"
                     />
                     <button
                       onClick={() => updateMinutes(key, minutes[key] + 1)}
                       className={`w-8 h-8 rounded-full ${cardInner} flex items-center justify-center font-medium`}
-                    >
-                      +
-                    </button>
+                    >+</button>
                   </div>
                 </div>
               ))}
+              {/* 자동 시작 토글 */}
+              <div className="flex items-center justify-between pt-2 border-t border-neutral-700/30">
+                <div>
+                  <div className="text-sm font-medium">자동 시작</div>
+                  <div className={`text-xs ${subtext} mt-0.5`}>다음 모드 자동 실행</div>
+                </div>
+                <button
+                  onClick={() => setAutoStart(!autoStart)}
+                  className={`relative w-11 h-6 rounded-full transition ${
+                    autoStart ? (dark ? 'bg-white' : 'bg-neutral-900') : cardInner
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 w-5 h-5 rounded-full transition-all ${
+                      autoStart
+                        ? (dark ? 'bg-neutral-900 left-5' : 'bg-white left-5')
+                        : (dark ? 'bg-neutral-400 left-0.5' : 'bg-neutral-500 left-0.5')
+                    }`}
+                  />
+                </button>
+              </div>
               <button
                 onClick={() => speak('안녕하세요, 음성 테스트입니다')}
                 className={`mt-2 text-xs ${cardInner} py-2 rounded-lg hover:opacity-80`}
@@ -391,9 +422,7 @@ export default function App() {
             className={`w-full ${cardInner} ${text} text-sm rounded-xl px-3 py-2.5 outline-none border-none`}
           >
             {LOFI_STREAMS.map((s, i) => (
-              <option key={s.id} value={i}>
-                {s.name}
-              </option>
+              <option key={s.id} value={i}>{s.name}</option>
             ))}
           </select>
 
