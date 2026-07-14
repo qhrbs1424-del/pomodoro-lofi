@@ -50,7 +50,7 @@ export default function App() {
     window.speechSynthesis.onvoiceschanged = pickVoice
   }, [])
 
-  // 음성 재생 함수 (cancel 제거 → 지연 방지)
+  // 음성 재생 함수
   const speak = (text) => {
     if (!voiceOn || !('speechSynthesis' in window)) return
     const utter = new SpeechSynthesisUtterance(text)
@@ -73,27 +73,46 @@ export default function App() {
     localStorage.setItem('pomo_voice', JSON.stringify(voiceOn))
   }, [voiceOn])
 
+  // 타이머 + 음성 스케줄링 (TTS 지연 보정)
   useEffect(() => {
     if (!isRunning) return
+
+    const totalMs = secondsLeft * 1000
+    const scheduled = []
+    const countdownMap = { 5: '오', 4: '사', 3: '삼', 2: '이', 1: '일' }
+    const OFFSET = 300 // TTS 지연 보정 (ms) - 화면 바뀌기 300ms 전에 발화
+
+    Object.keys(countdownMap).forEach((n) => {
+      const num = Number(n)
+      const fireAt = totalMs - num * 1000 - OFFSET
+      if (fireAt > 0) {
+        scheduled.push(setTimeout(() => speak(countdownMap[num]), fireAt))
+      }
+    })
+
+    // 종료 안내 멘트
+    scheduled.push(
+      setTimeout(() => {
+        speak(mode === 'focus' ? '휴식 시간입니다' : '다시 집중해볼까요')
+      }, totalMs + 200)
+    )
+
+    // 화면 tick
     intervalRef.current = setInterval(() => {
       setSecondsLeft((s) => {
-        const next = s - 1
-        // 화면에 표시될 값 기준으로 카운트다운 (5,4,3,2,1)
-        const countdownMap = { 5: '오', 4: '사', 3: '삼', 2: '이', 1: '일' }
-        if (countdownMap[next]) speak(countdownMap[next])
-
         if (s <= 1) {
           clearInterval(intervalRef.current)
-          setTimeout(() => {
-            speak(mode === 'focus' ? '휴식 시간입니다' : '다시 집중해볼까요')
-          }, 700)
           handleComplete()
           return 0
         }
-        return next
+        return s - 1
       })
     }, 1000)
-    return () => clearInterval(intervalRef.current)
+
+    return () => {
+      clearInterval(intervalRef.current)
+      scheduled.forEach((t) => clearTimeout(t))
+    }
   }, [isRunning])
 
   const handleComplete = () => {
@@ -123,7 +142,7 @@ export default function App() {
     if (!isRunning && Notification.permission === 'default') {
       Notification.requestPermission()
     }
-    // 첫 클릭 시 음성 엔진 워밍업
+    // 음성 엔진 워밍업
     if (!isRunning && voiceOn && 'speechSynthesis' in window) {
       const warm = new SpeechSynthesisUtterance(' ')
       warm.volume = 0
@@ -380,12 +399,15 @@ export default function App() {
 
           {musicOn && (
             <div className="aspect-video rounded-xl overflow-hidden mt-3">
-              <iframe
-                key={LOFI_STREAMS[streamIdx].id}
-                width="100%"
-                height="100%"
-                src={`https://www.youtube.com/embed/${LOFI_STREAMS[streamIdx].id}?autoplay=1`}
-                title="Lo-f </div>
+              {`https://www.youtube.com/embed/${LOFI_STREAMS[streamIdx].id}?autoplay=1`}
+            </div>
+          )}
+        </div>
+
+        <footer className={`text-center text-xs ${subtext} pt-2`}>
+          thedogcake.com
+        </footer>
+      </div>
     </div>
   )
 }
