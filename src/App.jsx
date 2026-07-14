@@ -38,7 +38,6 @@ export default function App() {
   useEffect(() => {
     const pickVoice = () => {
       const voices = window.speechSynthesis.getVoices()
-      // 한국어 여성 목소리 우선 선택
       const koFemale = voices.find(
         (v) =>
           v.lang.startsWith('ko') &&
@@ -51,14 +50,13 @@ export default function App() {
     window.speechSynthesis.onvoiceschanged = pickVoice
   }, [])
 
-  // 음성 재생 함수
+  // 음성 재생 함수 (cancel 제거 → 지연 방지)
   const speak = (text) => {
     if (!voiceOn || !('speechSynthesis' in window)) return
-    window.speechSynthesis.cancel()
     const utter = new SpeechSynthesisUtterance(text)
     utter.lang = 'ko-KR'
     utter.rate = 1.0
-    utter.pitch = 1.2 // 조금 높여서 여성 톤 강조
+    utter.pitch = 1.2
     if (femaleVoiceRef.current) utter.voice = femaleVoiceRef.current
     window.speechSynthesis.speak(utter)
   }
@@ -79,9 +77,10 @@ export default function App() {
     if (!isRunning) return
     intervalRef.current = setInterval(() => {
       setSecondsLeft((s) => {
-        // 5초 남았을 때부터 카운트다운
+        const next = s - 1
+        // 화면에 표시될 값 기준으로 카운트다운 (5,4,3,2,1)
         const countdownMap = { 5: '오', 4: '사', 3: '삼', 2: '이', 1: '일' }
-        if (countdownMap[s]) speak(countdownMap[s])
+        if (countdownMap[next]) speak(countdownMap[next])
 
         if (s <= 1) {
           clearInterval(intervalRef.current)
@@ -91,7 +90,7 @@ export default function App() {
           handleComplete()
           return 0
         }
-        return s - 1
+        return next
       })
     }, 1000)
     return () => clearInterval(intervalRef.current)
@@ -124,7 +123,7 @@ export default function App() {
     if (!isRunning && Notification.permission === 'default') {
       Notification.requestPermission()
     }
-    // 첫 클릭 시 음성 엔진 워밍업 (iOS/Safari 대응)
+    // 첫 클릭 시 음성 엔진 워밍업
     if (!isRunning && voiceOn && 'speechSynthesis' in window) {
       const warm = new SpeechSynthesisUtterance(' ')
       warm.volume = 0
@@ -381,15 +380,12 @@ export default function App() {
 
           {musicOn && (
             <div className="aspect-video rounded-xl overflow-hidden mt-3">
-              {`https://www.youtube.com/embed/${LOFI_STREAMS[streamIdx].id}?autoplay=1`}
-            </div>
-          )}
-        </div>
-
-        <footer className={`text-center text-xs ${subtext} pt-2`}>
-          thedogcake.com
-        </footer>
-      </div>
+              <iframe
+                key={LOFI_STREAMS[streamIdx].id}
+                width="100%"
+                height="100%"
+                src={`https://www.youtube.com/embed/${LOFI_STREAMS[streamIdx].id}?autoplay=1`}
+                title="Lo-f </div>
     </div>
   )
 }
